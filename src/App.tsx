@@ -4,6 +4,7 @@ import "./App.css";
 
 const BOARD_WIDTH = 6000;
 const BOARD_HEIGHT = 4000;
+const SIDEBAR_WIDTH = 220;
 
 type TextItem = {
     id: string;
@@ -20,6 +21,8 @@ export default function App() {
     const [scale, setScale] = useState(0.25);
     const [pos, setPos] = useState({ x: 260, y: 80 });
     const [texts, setTexts] = useState<TextItem[]>([]);
+    const [isPanning, setIsPanning] = useState(false);
+    const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
     const handleWheel = (e: any) => {
         e.evt.preventDefault();
@@ -82,6 +85,41 @@ export default function App() {
         );
     };
 
+    const handleMouseDown = (e: any) => {
+        if (e.evt.button === 1) {
+            e.evt.preventDefault();
+            setIsPanning(true);
+            setLastPointer({
+                x: e.evt.clientX,
+                y: e.evt.clientY,
+            });
+        }
+    };
+
+    const handleMouseMove = (e: any) => {
+        if (!isPanning) return;
+
+        const currentX = e.evt.clientX;
+        const currentY = e.evt.clientY;
+
+        const dx = currentX - lastPointer.x;
+        const dy = currentY - lastPointer.y;
+
+        setPos((prev) => ({
+            x: prev.x + dx,
+            y: prev.y + dy,
+        }));
+
+        setLastPointer({
+            x: currentX,
+            y: currentY,
+        });
+    };
+
+    const stopPanning = () => {
+        setIsPanning(false);
+    };
+
     return (
         <div
             style={{
@@ -118,7 +156,9 @@ export default function App() {
                 </button>
 
                 <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
-                    Drag the canvas to pan.
+                    Left click drag text to move it.
+                    <br />
+                    Middle click drag to pan.
                     <br />
                     Scroll to zoom.
                     <br />
@@ -129,19 +169,17 @@ export default function App() {
             <div style={{ flex: 1, height: "100%" }}>
                 <Stage
                     ref={stageRef}
-                    width={window.innerWidth - 220}
+                    width={window.innerWidth - SIDEBAR_WIDTH}
                     height={window.innerHeight}
                     x={pos.x}
                     y={pos.y}
                     scaleX={scale}
                     scaleY={scale}
-                    draggable
-                    onDragEnd={(e) => {
-                        setPos({
-                            x: e.target.x(),
-                            y: e.target.y(),
-                        });
-                    }}
+                    draggable={false}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={stopPanning}
+                    onMouseLeave={stopPanning}
                     onWheel={handleWheel}
                 >
                     <Layer>

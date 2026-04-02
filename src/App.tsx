@@ -206,6 +206,46 @@ export default function App() {
         setSelectedId(null);
     };
 
+    const renameActiveBoard = () => {
+        if (!activeBoard) return;
+
+        const nextName = window.prompt("Rename board", activeBoard.name);
+        if (nextName === null) return;
+
+        const trimmedName = nextName.trim();
+        if (!trimmedName) return;
+
+        updateActiveBoard((board) => ({
+            ...board,
+            name: trimmedName,
+        }));
+    };
+
+    const deleteActiveBoard = () => {
+        if (!activeBoard) return;
+        if (boards.length <= 1) {
+            window.alert("You need to keep at least one board.");
+            return;
+        }
+
+        const confirmed = window.confirm(`Delete "${activeBoard.name}"?`);
+        if (!confirmed) return;
+
+        const currentIndex = boards.findIndex((board) => board.id === activeBoard.id);
+        const remainingBoards = boards.filter((board) => board.id !== activeBoard.id);
+
+        setBoards(remainingBoards);
+
+        const nextBoard =
+            remainingBoards[currentIndex] ??
+            remainingBoards[currentIndex - 1] ??
+            remainingBoards[0] ??
+            null;
+
+        setActiveBoardId(nextBoard ? nextBoard.id : null);
+        setSelectedId(null);
+    };
+
     const addText = () => {
         const newText: TextItem = {
             id: crypto.randomUUID(),
@@ -353,7 +393,7 @@ export default function App() {
             y: 0,
             width: BOARD_WIDTH,
             height: BOARD_HEIGHT,
-            pixelRatio: 3,
+            pixelRatio: 2,
         });
 
         stage.scale({ x: previousScaleX, y: previousScaleY });
@@ -481,6 +521,35 @@ export default function App() {
                     }}
                 >
                     Add Board
+                </button>
+
+                <button
+                    onClick={renameActiveBoard}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: "pointer",
+                        marginBottom: "12px",
+                    }}
+                    disabled={!activeBoard}
+                >
+                    Rename Board
+                </button>
+
+                <button
+                    onClick={deleteActiveBoard}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: boards.length > 1 ? "pointer" : "not-allowed",
+                        marginBottom: "12px",
+                        opacity: boards.length > 1 ? 1 : 0.6,
+                    }}
+                    disabled={!activeBoard || boards.length <= 1}
+                >
+                    Delete Board
                 </button>
 
                 <button

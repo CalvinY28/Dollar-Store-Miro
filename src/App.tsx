@@ -259,7 +259,7 @@ export default function App() {
                 ...board,
                 items: nextItems,
                 history: {
-                    past: [...board.history.past, cloneItems(board.items)],
+                    past: [...board.history.past, cloneItems(board.items)].slice(-20),
                     future: [],
                 },
             };

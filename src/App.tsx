@@ -129,7 +129,7 @@ function ImageNode({
     onDragStart: (id: string) => void;
     onDragEnd: (id: string, e: KonvaEventObject<DragEvent>) => void;
 }) {
-    const [image, setImage] = useState<HTMLImageElement | null>(null);
+    const [image, setImage] = useState<HTMLImageElement | undefined>(undefined);
 
     useEffect(() => {
         const img = new window.Image();

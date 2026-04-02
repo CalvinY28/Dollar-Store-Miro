@@ -90,12 +90,8 @@ function normalizeBoard(raw: Partial<Board>, index: number, total: number): Boar
                 ? raw.pos
                 : { x: 100, y: 80 },
         history: {
-            past: Array.isArray(raw.history?.past)
-                ? raw.history.past.map((snapshot) => cloneItems(snapshot))
-                : [],
-            future: Array.isArray(raw.history?.future)
-                ? raw.history.future.map((snapshot) => cloneItems(snapshot))
-                : [],
+            past: [],
+            future: [],
         },
     };
 }

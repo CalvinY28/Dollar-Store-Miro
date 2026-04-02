@@ -14,7 +14,6 @@ import "./App.css";
 
 const BOARD_WIDTH = 6000;
 const BOARD_HEIGHT = 4000;
-const SIDEBAR_WIDTH = 220;
 const PASTE_OFFSET = 30;
 
 type TextItem = {
@@ -60,16 +59,36 @@ function cloneItems(items: BoardItem[]): BoardItem[] {
     return items.map((item) => ({ ...item }));
 }
 
-function normalizeBoard(raw: Partial<Board>, index: number): Board {
+function createDefaultBoard(name = "Board 1"): Board {
+    return {
+        id: crypto.randomUUID(),
+        name,
+        items: [],
+        scale: 0.25,
+        pos: { x: 100, y: 80 },
+        history: {
+            past: [],
+            future: [],
+        },
+    };
+}
+
+function normalizeBoard(raw: Partial<Board>, index: number, total: number): Board {
+    const fallbackName =
+        total === 1 && index === 0 ? "Board 1" : `Board ${index + 1}`;
+
     return {
         id: raw.id ?? crypto.randomUUID(),
-        name: raw.name ?? `Board ${index + 1}`,
+        name:
+            typeof raw.name === "string" && raw.name.trim()
+                ? raw.name
+                : fallbackName,
         items: Array.isArray(raw.items) ? cloneItems(raw.items) : [],
         scale: typeof raw.scale === "number" ? raw.scale : 0.25,
         pos:
             raw.pos && typeof raw.pos.x === "number" && typeof raw.pos.y === "number"
                 ? raw.pos
-                : { x: 260, y: 80 },
+                : { x: 100, y: 80 },
         history: {
             past: Array.isArray(raw.history?.past)
                 ? raw.history.past.map((snapshot) => cloneItems(snapshot))
@@ -81,18 +100,20 @@ function normalizeBoard(raw: Partial<Board>, index: number): Board {
     };
 }
 
-function createDefaultBoard(name = "Board 1"): Board {
-    return {
-        id: crypto.randomUUID(),
-        name,
-        items: [],
-        scale: 0.25,
-        pos: { x: 260, y: 80 },
-        history: {
-            past: [],
-            future: [],
-        },
-    };
+function getNextBoardName(boards: Board[]): string {
+    let maxNumber = 0;
+
+    for (const board of boards) {
+        const match = board.name.match(/^Board\s+(\d+)$/i);
+        if (match) {
+            const value = Number(match[1]);
+            if (!Number.isNaN(value)) {
+                maxNumber = Math.max(maxNumber, value);
+            }
+        }
+    }
+
+    return `Board ${maxNumber + 1}`;
 }
 
 function ImageNode({
@@ -140,22 +161,33 @@ export default function App() {
     const trRef = useRef<Konva.Transformer | null>(null);
     const shapeRefs = useRef<Record<string, Konva.Text | Konva.Image | null>>({});
     const textEditorRef = useRef<HTMLTextAreaElement | null>(null);
-    const boardRenameRef = useRef<HTMLInputElement | null>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const boardNameInputRef = useRef<HTMLInputElement | null>(null);
 
     const dragStartPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
     const clipboardRef = useRef<BoardItem[]>([]);
+    const lastBoardPointerRef = useRef<{ x: number; y: number }>({ x: 300, y: 200 });
 
     const [boards, setBoards] = useState<Board[]>(() => {
         const saved = localStorage.getItem("board-app-boards");
-        if (!saved) return [createDefaultBoard()];
+        if (!saved) return [createDefaultBoard("Board 1")];
 
         try {
             const parsed = JSON.parse(saved) as Partial<Board>[];
-            return parsed.length > 0
-                ? parsed.map((board, index) => normalizeBoard(board, index))
-                : [createDefaultBoard()];
+            const normalized =
+                parsed.length > 0
+                    ? parsed.map((board, index) =>
+                        normalizeBoard(board, index, parsed.length)
+                    )
+                    : [createDefaultBoard("Board 1")];
+
+            if (normalized.length === 1) {
+                normalized[0] = { ...normalized[0], name: "Board 1" };
+            }
+
+            return normalized;
         } catch {
-            return [createDefaultBoard()];
+            return [createDefaultBoard("Board 1")];
         }
     });
 
@@ -166,7 +198,8 @@ export default function App() {
 
     const [editingTextId, setEditingTextId] = useState<string | null>(null);
     const [editingTextValue, setEditingTextValue] = useState("");
-    const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
+
+    const [renamingBoard, setRenamingBoard] = useState(false);
     const [renamingBoardValue, setRenamingBoardValue] = useState("");
 
     useEffect(() => {
@@ -180,10 +213,10 @@ export default function App() {
     }, [boards]);
 
     const activeBoard = boards.find((board) => board.id === activeBoardId) ?? null;
+    const activeBoardIndex = boards.findIndex((board) => board.id === activeBoardId);
     const scale = activeBoard?.scale ?? 0.25;
-    const pos = activeBoard?.pos ?? { x: 260, y: 80 };
+    const pos = activeBoard?.pos ?? { x: 100, y: 80 };
     const items = activeBoard?.items ?? [];
-    const selectedItems = items.filter((item) => selectedIds.includes(item.id));
 
     const editingTextItem = useMemo(() => {
         if (!editingTextId) return null;
@@ -213,6 +246,39 @@ export default function App() {
                     future: [],
                 },
             };
+        });
+    };
+
+    const getBoardPointerPosition = () => {
+        const stage = stageRef.current;
+        if (!stage) return lastBoardPointerRef.current;
+
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return lastBoardPointerRef.current;
+
+        return {
+            x: (pointer.x - pos.x) / scale,
+            y: (pointer.y - pos.y) / scale,
+        };
+    };
+
+    const clampToBoard = (point: { x: number; y: number }) => {
+        return {
+            x: Math.max(0, Math.min(BOARD_WIDTH - 10, point.x)),
+            y: Math.max(0, Math.min(BOARD_HEIGHT - 10, point.y)),
+        };
+    };
+
+    const updateLastBoardPointer = (e: KonvaEventObject<MouseEvent | DragEvent | WheelEvent>) => {
+        const stage = e.target.getStage();
+        if (!stage) return;
+
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
+
+        lastBoardPointerRef.current = clampToBoard({
+            x: (pointer.x - pos.x) / scale,
+            y: (pointer.y - pos.y) / scale,
         });
     };
 
@@ -287,17 +353,17 @@ export default function App() {
     }, [editingTextId]);
 
     useEffect(() => {
-        if (renamingBoardId && boardRenameRef.current) {
-            boardRenameRef.current.focus();
-            boardRenameRef.current.select();
+        if (renamingBoard && boardNameInputRef.current) {
+            boardNameInputRef.current.focus();
+            boardNameInputRef.current.select();
         }
-    }, [renamingBoardId]);
+    }, [renamingBoard]);
 
     const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
         e.evt.preventDefault();
 
         const stage = e.target.getStage();
-        if (!stage || !activeBoard || editingTextId) return;
+        if (!stage || !activeBoard || editingTextId || renamingBoard) return;
 
         const pointer = stage.getPointerPosition();
         if (!pointer) return;
@@ -319,6 +385,8 @@ export default function App() {
             y: pointer.y - mousePointTo.y * clampedScale,
         };
 
+        lastBoardPointerRef.current = clampToBoard(mousePointTo);
+
         updateActiveBoard((board) => ({
             ...board,
             scale: clampedScale,
@@ -327,53 +395,24 @@ export default function App() {
     };
 
     const addBoard = () => {
-        const newBoard = createDefaultBoard(`Board ${boards.length + 1}`);
+        const newBoard = createDefaultBoard(getNextBoardName(boards));
         setBoards((prev) => [...prev, newBoard]);
         setActiveBoardId(newBoard.id);
         setSelectedIds([]);
         setEditingTextId(null);
     };
 
-    const startRenamingBoard = (board: Board) => {
-        setRenamingBoardId(board.id);
-        setRenamingBoardValue(board.name);
-    };
-
-    const saveBoardRename = () => {
-        if (!renamingBoardId) return;
-
-        const trimmed = renamingBoardValue.trim();
-
-        if (!trimmed) {
-            setRenamingBoardId(null);
-            setRenamingBoardValue("");
-            return;
-        }
-
-        setBoards((prev) =>
-            prev.map((board) =>
-                board.id === renamingBoardId ? { ...board, name: trimmed } : board
-            )
-        );
-
-        setRenamingBoardId(null);
-        setRenamingBoardValue("");
-    };
-
-    const cancelBoardRename = () => {
-        setRenamingBoardId(null);
-        setRenamingBoardValue("");
+    const goToBoardByIndex = (index: number) => {
+        if (index < 0 || index >= boards.length) return;
+        setActiveBoardId(boards[index].id);
+        setSelectedIds([]);
+        setEditingTextId(null);
+        setRenamingBoard(false);
     };
 
     const deleteActiveBoard = () => {
         if (!activeBoard) return;
-        if (boards.length <= 1) {
-            window.alert("You need to keep at least one board.");
-            return;
-        }
-
-        const confirmed = window.confirm(`Delete "${activeBoard.name}"?`);
-        if (!confirmed) return;
+        if (boards.length <= 1) return;
 
         const currentIndex = boards.findIndex((board) => board.id === activeBoard.id);
         const remainingBoards = boards.filter((board) => board.id !== activeBoard.id);
@@ -389,14 +428,47 @@ export default function App() {
         setActiveBoardId(nextBoard ? nextBoard.id : null);
         setSelectedIds([]);
         setEditingTextId(null);
+        setRenamingBoard(false);
+    };
+
+    const startRenamingBoard = () => {
+        if (!activeBoard) return;
+        setRenamingBoardValue(activeBoard.name);
+        setRenamingBoard(true);
+    };
+
+    const saveRenamingBoard = () => {
+        if (!activeBoard) return;
+
+        const trimmed = renamingBoardValue.trim();
+        if (!trimmed) {
+            setRenamingBoard(false);
+            setRenamingBoardValue("");
+            return;
+        }
+
+        updateActiveBoard((board) => ({
+            ...board,
+            name: trimmed,
+        }));
+
+        setRenamingBoard(false);
+        setRenamingBoardValue("");
+    };
+
+    const cancelRenamingBoard = () => {
+        setRenamingBoard(false);
+        setRenamingBoardValue("");
     };
 
     const addText = () => {
+        const spawn = clampToBoard(getBoardPointerPosition());
+
         const newText: TextItem = {
             id: crypto.randomUUID(),
             type: "text",
-            x: 300,
-            y: 200,
+            x: spawn.x,
+            y: spawn.y,
             text: "Double-click to edit",
             fontSize: 32,
             width: 320,
@@ -407,6 +479,7 @@ export default function App() {
     };
 
     const addImageFromFile = (file: File) => {
+        const spawn = clampToBoard(getBoardPointerPosition());
         const reader = new FileReader();
 
         reader.onload = () => {
@@ -421,8 +494,8 @@ export default function App() {
                 const newImage: ImageItem = {
                     id: crypto.randomUUID(),
                     type: "image",
-                    x: 300,
-                    y: 300,
+                    x: spawn.x,
+                    y: spawn.y,
                     width: img.width * imageScale,
                     height: img.height * imageScale,
                     src,
@@ -630,16 +703,28 @@ export default function App() {
             return false;
         };
 
+        const isTypingInInput = (target: EventTarget | null) => {
+            const el = target as HTMLElement | null;
+            if (!el) return false;
+            const tag = el.tagName;
+            return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+        };
+
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (editingTextId) return;
+            if (isTypingInInput(e.target)) return;
+
+            const key = e.key.toLowerCase();
 
             const isUndo =
-                (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+                (e.ctrlKey || e.metaKey) && !e.shiftKey && key === "z";
             const isRedo =
-                ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") ||
-                ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z");
-            const isCopy = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c";
-            const isPaste = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v";
+                ((e.ctrlKey || e.metaKey) && key === "y") ||
+                ((e.ctrlKey || e.metaKey) && e.shiftKey && key === "z");
+            const isCopy = (e.ctrlKey || e.metaKey) && key === "c";
+            const isPaste = (e.ctrlKey || e.metaKey) && key === "v";
+            const isDeleteBoard = (e.ctrlKey || e.metaKey) && key === "r";
+
+            if (editingTextId || renamingBoard) return;
 
             if (isUndo) {
                 e.preventDefault();
@@ -650,6 +735,12 @@ export default function App() {
             if (isRedo) {
                 e.preventDefault();
                 redoActiveBoard();
+                return;
+            }
+
+            if (isDeleteBoard) {
+                e.preventDefault();
+                deleteActiveBoard();
                 return;
             }
 
@@ -685,16 +776,62 @@ export default function App() {
                 return;
             }
 
-            if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length > 0) {
-                commitActiveBoardItems((currentItems) =>
-                    currentItems.filter((item) => !selectedIds.includes(item.id))
-                );
-                setSelectedIds([]);
+            if (e.key === "Delete" || e.key === "Backspace") {
+                if (selectedIds.length > 0) {
+                    e.preventDefault();
+                    commitActiveBoardItems((currentItems) =>
+                        currentItems.filter((item) => !selectedIds.includes(item.id))
+                    );
+                    setSelectedIds([]);
+                }
+                return;
+            }
+
+            if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                if (activeBoardIndex > 0) {
+                    goToBoardByIndex(activeBoardIndex - 1);
+                }
+                return;
+            }
+
+            if (e.key === "ArrowRight") {
+                e.preventDefault();
+                if (activeBoardIndex >= 0 && activeBoardIndex < boards.length - 1) {
+                    goToBoardByIndex(activeBoardIndex + 1);
+                }
+                return;
+            }
+
+            if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                if (key === "q") {
+                    e.preventDefault();
+                    addText();
+                    return;
+                }
+
+                if (key === "w") {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                    return;
+                }
+
+                if (key === "e") {
+                    e.preventDefault();
+                    exportBoardAsPDF();
+                    return;
+                }
+
+                if (key === "r") {
+                    e.preventDefault();
+                    addBoard();
+                    return;
+                }
             }
         };
 
         const handlePaste = (e: ClipboardEvent) => {
-            if (editingTextId) return;
+            if (editingTextId || renamingBoard) return;
             handlePasteImage(e);
         };
 
@@ -705,10 +842,12 @@ export default function App() {
             window.removeEventListener("keydown", handleKeyDown);
             window.removeEventListener("paste", handlePaste);
         };
-    }, [selectedIds, activeBoardId, editingTextId, activeBoard, items]);
+    }, [selectedIds, activeBoardId, editingTextId, renamingBoard, activeBoard, items, activeBoardIndex, boards.length]);
 
     const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
-        if (editingTextId) return;
+        if (editingTextId || renamingBoard) return;
+
+        updateLastBoardPointer(e);
 
         const clickedOnStage = e.target === e.target.getStage();
         const clickedOnBoardBackground = e.target.name() === "board-background";
@@ -730,7 +869,9 @@ export default function App() {
     };
 
     const handleStageMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-        if (!isPanning || !activeBoard || editingTextId) return;
+        updateLastBoardPointer(e);
+
+        if (!isPanning || !activeBoard || editingTextId || renamingBoard) return;
 
         const currentX = e.evt.clientX;
         const currentY = e.evt.clientY;
@@ -756,7 +897,7 @@ export default function App() {
     const textEditorStyle = useMemo(() => {
         if (!editingTextItem) return null;
 
-        const left = SIDEBAR_WIDTH + pos.x + editingTextItem.x * scale;
+        const left = pos.x + editingTextItem.x * scale;
         const top = pos.y + editingTextItem.y * scale;
 
         return {
@@ -782,16 +923,12 @@ export default function App() {
         };
     }, [editingTextItem, pos, scale]);
 
-    const canUndo = (activeBoard?.history.past.length ?? 0) > 0;
-    const canRedo = (activeBoard?.history.future.length ?? 0) > 0;
-
     return (
         <div
             style={{
                 width: "100vw",
                 height: "100vh",
                 overflow: "hidden",
-                display: "flex",
                 background: "#d9d9d9",
                 position: "relative",
             }}
@@ -799,292 +936,151 @@ export default function App() {
                 if (e.button === 1) e.preventDefault();
             }}
         >
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                        addImageFromFile(file);
+                        e.target.value = "";
+                    }
+                }}
+            />
+
             <div
                 style={{
-                    width: "220px",
-                    height: "100%",
-                    background: "#f3f3f3",
-                    borderRight: "1px solid #c8c8c8",
-                    padding: "16px",
-                    boxSizing: "border-box",
-                    overflowY: "auto",
+                    position: "absolute",
+                    top: 12,
+                    left: 12,
+                    zIndex: 15,
+                    background: "rgba(255,255,255,0.9)",
+                    border: "1px solid #bbb",
+                    padding: "8px 10px",
+                    fontSize: "12px",
+                    lineHeight: 1.4,
+                    borderRadius: "6px",
+                    userSelect: "none",
+                    minWidth: "120px",
                 }}
             >
-                <h2 style={{ marginTop: 0, fontSize: "20px" }}>Board App</h2>
+                <div>Board {activeBoardIndex + 1}/{boards.length}</div>
 
-                <button
-                    onClick={addBoard}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: "pointer",
-                        marginBottom: "12px",
-                    }}
-                >
-                    Add Board
-                </button>
-
-                <button
-                    onClick={undoActiveBoard}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: canUndo ? "pointer" : "not-allowed",
-                        marginBottom: "12px",
-                        opacity: canUndo ? 1 : 0.6,
-                    }}
-                    disabled={!activeBoard || !canUndo}
-                >
-                    Undo
-                </button>
-
-                <button
-                    onClick={redoActiveBoard}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: canRedo ? "pointer" : "not-allowed",
-                        marginBottom: "12px",
-                        opacity: canRedo ? 1 : 0.6,
-                    }}
-                    disabled={!activeBoard || !canRedo}
-                >
-                    Redo
-                </button>
-
-                <button
-                    onClick={deleteActiveBoard}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: boards.length > 1 ? "pointer" : "not-allowed",
-                        marginBottom: "12px",
-                        opacity: boards.length > 1 ? 1 : 0.6,
-                    }}
-                    disabled={!activeBoard || boards.length <= 1}
-                >
-                    Delete Board
-                </button>
-
-                <button
-                    onClick={addText}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: "pointer",
-                        marginBottom: "12px",
-                    }}
-                    disabled={!activeBoard}
-                >
-                    Add Text
-                </button>
-
-                <label
-                    style={{
-                        display: "block",
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: activeBoard ? "pointer" : "not-allowed",
-                        marginBottom: "12px",
-                        background: "#fff",
-                        border: "1px solid #bbb",
-                        textAlign: "center",
-                        boxSizing: "border-box",
-                        opacity: activeBoard ? 1 : 0.6,
-                    }}
-                >
-                    Add Image
+                {renamingBoard ? (
                     <input
-                        type="file"
-                        accept="image/*"
-                        style={{ display: "none" }}
-                        disabled={!activeBoard}
-                        onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                                addImageFromFile(file);
-                                e.target.value = "";
+                        ref={boardNameInputRef}
+                        value={renamingBoardValue}
+                        onChange={(e) => setRenamingBoardValue(e.target.value)}
+                        onBlur={saveRenamingBoard}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                saveRenamingBoard();
+                            }
+                            if (e.key === "Escape") {
+                                e.preventDefault();
+                                cancelRenamingBoard();
                             }
                         }}
+                        style={{
+                            marginTop: "4px",
+                            width: "100%",
+                            boxSizing: "border-box",
+                            fontSize: "12px",
+                        }}
                     />
-                </label>
-
-                <button
-                    onClick={exportBoardAsPDF}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: "pointer",
-                        marginBottom: "12px",
-                    }}
-                    disabled={!activeBoard}
-                >
-                    Export PDF
-                </button>
-
-                <div style={{ marginBottom: "12px" }}>
-                    <div style={{ fontWeight: "bold", marginBottom: "8px" }}>Boards</div>
-
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                        {boards.map((board) => {
-                            const isRenaming = renamingBoardId === board.id;
-
-                            if (isRenaming) {
-                                return (
-                                    <input
-                                        key={board.id}
-                                        ref={boardRenameRef}
-                                        value={renamingBoardValue}
-                                        onChange={(e) => setRenamingBoardValue(e.target.value)}
-                                        onBlur={saveBoardRename}
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter") {
-                                                e.preventDefault();
-                                                saveBoardRename();
-                                            }
-                                            if (e.key === "Escape") {
-                                                e.preventDefault();
-                                                cancelBoardRename();
-                                            }
-                                        }}
-                                        style={{
-                                            width: "100%",
-                                            padding: "10px",
-                                            border: "1px solid #3b82f6",
-                                            boxSizing: "border-box",
-                                            fontSize: "14px",
-                                        }}
-                                    />
-                                );
-                            }
-
-                            return (
-                                <button
-                                    key={board.id}
-                                    onClick={() => {
-                                        setActiveBoardId(board.id);
-                                        setSelectedIds([]);
-                                        setEditingTextId(null);
-                                    }}
-                                    onDoubleClick={() => startRenamingBoard(board)}
-                                    style={{
-                                        width: "100%",
-                                        padding: "10px",
-                                        textAlign: "left",
-                                        cursor: "pointer",
-                                        border: "1px solid #bbb",
-                                        background: board.id === activeBoardId ? "#dbeafe" : "#fff",
-                                    }}
-                                    title="Double-click to rename"
-                                >
-                                    {board.name}
-                                </button>
-                            );
-                        })}
+                ) : (
+                    <div
+                        onDoubleClick={startRenamingBoard}
+                        title="Double-click to rename board"
+                        style={{
+                            marginTop: "4px",
+                            cursor: "text",
+                            color: "#111",
+                        }}
+                    >
+                        {activeBoard ? activeBoard.name : ""}
                     </div>
-                </div>
-
-                <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
-                    Shift+click for multi-select.
-                    <br />
-                    Drag selected items together.
-                    <br />
-                    Resize selected items together.
-                    <br />
-                    Ctrl+C / Ctrl+V duplicates selected items.
-                    <br />
-                    Double-click text to edit inline.
-                    <br />
-                    Double-click board names to rename.
-                    <br />
-                    Undo/Redo is per board.
-                </p>
+                )}
             </div>
 
-            <div style={{ flex: 1, height: "100%" }}>
-                <Stage
-                    ref={stageRef}
-                    width={window.innerWidth - SIDEBAR_WIDTH}
-                    height={window.innerHeight}
-                    x={pos.x}
-                    y={pos.y}
-                    scaleX={scale}
-                    scaleY={scale}
-                    onMouseDown={handleStageMouseDown}
-                    onMouseMove={handleStageMouseMove}
-                    onMouseUp={stopPanning}
-                    onMouseLeave={stopPanning}
-                    onWheel={handleWheel}
-                >
-                    <Layer>
-                        <Rect
-                            name="board-background"
-                            x={0}
-                            y={0}
-                            width={BOARD_WIDTH}
-                            height={BOARD_HEIGHT}
-                            fill="white"
-                            stroke="#999"
-                            strokeWidth={2}
-                        />
+            <Stage
+                ref={stageRef}
+                width={window.innerWidth}
+                height={window.innerHeight}
+                x={pos.x}
+                y={pos.y}
+                scaleX={scale}
+                scaleY={scale}
+                onMouseDown={handleStageMouseDown}
+                onMouseMove={handleStageMouseMove}
+                onMouseUp={stopPanning}
+                onMouseLeave={stopPanning}
+                onWheel={handleWheel}
+            >
+                <Layer>
+                    <Rect
+                        name="board-background"
+                        x={0}
+                        y={0}
+                        width={BOARD_WIDTH}
+                        height={BOARD_HEIGHT}
+                        fill="white"
+                        stroke="#999"
+                        strokeWidth={2}
+                    />
 
-                        {items.map((item) => {
-                            if (item.type === "text") {
-                                const isEditing = editingTextId === item.id;
-
-                                return (
-                                    <Text
-                                        key={item.id}
-                                        ref={(node) => {
-                                            shapeRefs.current[item.id] = node;
-                                        }}
-                                        x={item.x}
-                                        y={item.y}
-                                        text={item.text}
-                                        fontSize={item.fontSize}
-                                        width={item.width}
-                                        fill="black"
-                                        visible={!isEditing}
-                                        draggable={!isEditing}
-                                        onMouseDown={(e) => selectItem(e, item.id)}
-                                        onClick={(e) => selectItem(e, item.id)}
-                                        onDragStart={() => handleItemDragStart(item.id)}
-                                        onDragEnd={(e: KonvaEventObject<DragEvent>) => {
-                                            handleItemDragEnd(item.id, e);
-                                        }}
-                                        onDblClick={() => startEditingText(item.id)}
-                                    />
-                                );
-                            }
+                    {items.map((item) => {
+                        if (item.type === "text") {
+                            const isEditing = editingTextId === item.id;
 
                             return (
-                                <ImageNode
+                                <Text
                                     key={item.id}
-                                    item={item}
-                                    shapeRefs={shapeRefs}
-                                    onSelect={selectItem}
-                                    onDragStart={handleItemDragStart}
-                                    onDragEnd={handleItemDragEnd}
+                                    ref={(node) => {
+                                        shapeRefs.current[item.id] = node;
+                                    }}
+                                    x={item.x}
+                                    y={item.y}
+                                    text={item.text}
+                                    fontSize={item.fontSize}
+                                    width={item.width}
+                                    fill="black"
+                                    visible={!isEditing}
+                                    draggable={!isEditing}
+                                    onMouseDown={(e) => selectItem(e, item.id)}
+                                    onClick={(e) => selectItem(e, item.id)}
+                                    onDragStart={() => handleItemDragStart(item.id)}
+                                    onDragEnd={(e: KonvaEventObject<DragEvent>) => {
+                                        handleItemDragEnd(item.id, e);
+                                    }}
+                                    onDblClick={() => startEditingText(item.id)}
                                 />
                             );
-                        })}
+                        }
 
-                        <Transformer
-                            ref={trRef}
-                            rotateEnabled={false}
-                            keepRatio={false}
-                            onTransformEnd={applyTransform}
-                        />
-                    </Layer>
-                </Stage>
-            </div>
+                        return (
+                            <ImageNode
+                                key={item.id}
+                                item={item}
+                                shapeRefs={shapeRefs}
+                                onSelect={selectItem}
+                                onDragStart={handleItemDragStart}
+                                onDragEnd={handleItemDragEnd}
+                            />
+                        );
+                    })}
+
+                    <Transformer
+                        ref={trRef}
+                        rotateEnabled={false}
+                        keepRatio={false}
+                        onTransformEnd={applyTransform}
+                    />
+                </Layer>
+            </Stage>
 
             {editingTextItem && textEditorStyle && (
                 <textarea

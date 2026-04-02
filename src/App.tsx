@@ -38,6 +38,11 @@ type ImageItem = {
 
 type BoardItem = TextItem | ImageItem;
 
+type BoardHistory = {
+    past: BoardItem[][];
+    future: BoardItem[][];
+};
+
 type Board = {
     id: string;
     name: string;
@@ -47,7 +52,33 @@ type Board = {
         x: number;
         y: number;
     };
+    history: BoardHistory;
 };
+
+function cloneItems(items: BoardItem[]): BoardItem[] {
+    return items.map((item) => ({ ...item }));
+}
+
+function normalizeBoard(raw: Partial<Board>, index: number): Board {
+    return {
+        id: raw.id ?? crypto.randomUUID(),
+        name: raw.name ?? `Board ${index + 1}`,
+        items: Array.isArray(raw.items) ? cloneItems(raw.items) : [],
+        scale: typeof raw.scale === "number" ? raw.scale : 0.25,
+        pos:
+            raw.pos && typeof raw.pos.x === "number" && typeof raw.pos.y === "number"
+                ? raw.pos
+                : { x: 260, y: 80 },
+        history: {
+            past: Array.isArray(raw.history?.past)
+                ? raw.history.past.map((snapshot) => cloneItems(snapshot))
+                : [],
+            future: Array.isArray(raw.history?.future)
+                ? raw.history.future.map((snapshot) => cloneItems(snapshot))
+                : [],
+        },
+    };
+}
 
 function createDefaultBoard(name = "Board 1"): Board {
     return {
@@ -56,6 +87,10 @@ function createDefaultBoard(name = "Board 1"): Board {
         items: [],
         scale: 0.25,
         pos: { x: 260, y: 80 },
+        history: {
+            past: [],
+            future: [],
+        },
     };
 }
 
@@ -99,7 +134,6 @@ function ImageNode({
 }
 
 export default function App() {
-    const appRef = useRef<HTMLDivElement | null>(null);
     const stageRef = useRef<Konva.Stage | null>(null);
     const trRef = useRef<Konva.Transformer | null>(null);
     const shapeRefs = useRef<Record<string, Konva.Text | Konva.Image | null>>({});
@@ -111,8 +145,10 @@ export default function App() {
         if (!saved) return [createDefaultBoard()];
 
         try {
-            const parsed = JSON.parse(saved) as Board[];
-            return parsed.length > 0 ? parsed : [createDefaultBoard()];
+            const parsed = JSON.parse(saved) as Partial<Board>[];
+            return parsed.length > 0
+                ? parsed.map((board, index) => normalizeBoard(board, index))
+                : [createDefaultBoard()];
         } catch {
             return [createDefaultBoard()];
         }
@@ -158,6 +194,63 @@ export default function App() {
                 board.id === activeBoardId ? updater(board) : board
             )
         );
+    };
+
+    const commitActiveBoardItems = (updater: (items: BoardItem[]) => BoardItem[]) => {
+        updateActiveBoard((board) => {
+            const nextItems = updater(board.items);
+
+            return {
+                ...board,
+                items: nextItems,
+                history: {
+                    past: [...board.history.past, cloneItems(board.items)],
+                    future: [],
+                },
+            };
+        });
+    };
+
+    const undoActiveBoard = () => {
+        if (!activeBoard) return;
+        if (activeBoard.history.past.length === 0) return;
+
+        updateActiveBoard((board) => {
+            const previous = board.history.past[board.history.past.length - 1];
+
+            return {
+                ...board,
+                items: cloneItems(previous),
+                history: {
+                    past: board.history.past.slice(0, -1),
+                    future: [cloneItems(board.items), ...board.history.future],
+                },
+            };
+        });
+
+        setSelectedId(null);
+        setEditingTextId(null);
+    };
+
+    const redoActiveBoard = () => {
+        if (!activeBoard) return;
+        if (activeBoard.history.future.length === 0) return;
+
+        updateActiveBoard((board) => {
+            const next = board.history.future[0];
+
+            return {
+                ...board,
+                items: cloneItems(next),
+                history: {
+                    past: [...board.history.past, cloneItems(board.items)],
+                    future: board.history.future.slice(1),
+                },
+            };
+        });
+
+        setSelectedId(null);
+        setEditingTextId(null);
     };
 
     useEffect(() => {
@@ -303,10 +396,7 @@ export default function App() {
             width: 320,
         };
 
-        updateActiveBoard((board) => ({
-            ...board,
-            items: [...board.items, newText],
-        }));
+        commitActiveBoardItems((currentItems) => [...currentItems, newText]);
         setSelectedId(newText.id);
     };
 
@@ -332,10 +422,7 @@ export default function App() {
                     src,
                 };
 
-                updateActiveBoard((board) => ({
-                    ...board,
-                    items: [...board.items, newImage],
-                }));
+                commitActiveBoardItems((currentItems) => [...currentItems, newImage]);
                 setSelectedId(newImage.id);
             };
         };
@@ -355,14 +442,13 @@ export default function App() {
     const saveTextEdit = () => {
         if (!editingTextId) return;
 
-        updateActiveBoard((board) => ({
-            ...board,
-            items: board.items.map((i) =>
+        commitActiveBoardItems((currentItems) =>
+            currentItems.map((i) =>
                 i.id === editingTextId && i.type === "text"
                     ? { ...i, text: editingTextValue }
                     : i
-            ),
-        }));
+            )
+        );
 
         setEditingTextId(null);
     };
@@ -372,12 +458,11 @@ export default function App() {
     };
 
     const updateItemPosition = (id: string, x: number, y: number) => {
-        updateActiveBoard((board) => ({
-            ...board,
-            items: board.items.map((item) =>
+        commitActiveBoardItems((currentItems) =>
+            currentItems.map((item) =>
                 item.id === id ? { ...item, x, y } : item
-            ),
-        }));
+            )
+        );
     };
 
     const applyTransform = () => {
@@ -395,9 +480,8 @@ export default function App() {
             node.scaleX(1);
             node.scaleY(1);
 
-            updateActiveBoard((board) => ({
-                ...board,
-                items: board.items.map((i) =>
+            commitActiveBoardItems((currentItems) =>
+                currentItems.map((i) =>
                     i.id === selectedId && i.type === "image"
                         ? {
                             ...i,
@@ -407,8 +491,8 @@ export default function App() {
                             height: Math.max(20, node.height() * scaleY),
                         }
                         : i
-                ),
-            }));
+                )
+            );
         }
 
         if (item.type === "text") {
@@ -417,9 +501,8 @@ export default function App() {
             node.scaleX(1);
             node.scaleY(1);
 
-            updateActiveBoard((board) => ({
-                ...board,
-                items: board.items.map((i) =>
+            commitActiveBoardItems((currentItems) =>
+                currentItems.map((i) =>
                     i.id === selectedId && i.type === "text"
                         ? {
                             ...i,
@@ -429,8 +512,8 @@ export default function App() {
                             fontSize: Math.max(8, i.fontSize * scaleX),
                         }
                         : i
-                ),
-            }));
+                )
+            );
         }
     };
 
@@ -485,11 +568,28 @@ export default function App() {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (editingTextId) return;
 
+            const isUndo =
+                (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z";
+            const isRedo =
+                ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") ||
+                ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z");
+
+            if (isUndo) {
+                e.preventDefault();
+                undoActiveBoard();
+                return;
+            }
+
+            if (isRedo) {
+                e.preventDefault();
+                redoActiveBoard();
+                return;
+            }
+
             if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
-                updateActiveBoard((board) => ({
-                    ...board,
-                    items: board.items.filter((item) => item.id !== selectedId),
-                }));
+                commitActiveBoardItems((currentItems) =>
+                    currentItems.filter((item) => item.id !== selectedId)
+                );
                 setSelectedId(null);
             }
         };
@@ -501,7 +601,7 @@ export default function App() {
             window.removeEventListener("paste", handlePaste);
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [selectedId, activeBoardId, editingTextId]);
+    }, [selectedId, activeBoardId, editingTextId, activeBoard]);
 
     const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
         if (editingTextId) return;
@@ -576,9 +676,11 @@ export default function App() {
         };
     }, [editingTextItem, pos, scale]);
 
+    const canUndo = (activeBoard?.history.past.length ?? 0) > 0;
+    const canRedo = (activeBoard?.history.future.length ?? 0) > 0;
+
     return (
         <div
-            ref={appRef}
             style={{
                 width: "100vw",
                 height: "100vh",
@@ -615,6 +717,36 @@ export default function App() {
                     }}
                 >
                     Add Board
+                </button>
+
+                <button
+                    onClick={undoActiveBoard}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: canUndo ? "pointer" : "not-allowed",
+                        marginBottom: "12px",
+                        opacity: canUndo ? 1 : 0.6,
+                    }}
+                    disabled={!activeBoard || !canUndo}
+                >
+                    Undo
+                </button>
+
+                <button
+                    onClick={redoActiveBoard}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: canRedo ? "pointer" : "not-allowed",
+                        marginBottom: "12px",
+                        opacity: canRedo ? 1 : 0.6,
+                    }}
+                    disabled={!activeBoard || !canRedo}
+                >
+                    Redo
                 </button>
 
                 <button
@@ -758,6 +890,10 @@ export default function App() {
                     <br />
                     Double-click board names to rename.
                     <br />
+                    Undo/Redo is per board.
+                    <br />
+                    Ctrl+Z = Undo, Ctrl+Y = Redo.
+                    <br />
                     Left click item body to select/move.
                     <br />
                     Drag resize handles to resize.
@@ -767,10 +903,6 @@ export default function App() {
                     Scroll to zoom.
                     <br />
                     Ctrl + V to paste images.
-                    <br />
-                    Delete removes selected item.
-                    <br />
-                    Boards save automatically.
                 </p>
             </div>
 

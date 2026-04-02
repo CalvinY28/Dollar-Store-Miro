@@ -37,15 +37,34 @@ type ImageItem = {
 
 type BoardItem = TextItem | ImageItem;
 
+type Board = {
+    id: string;
+    name: string;
+    items: BoardItem[];
+    scale: number;
+    pos: {
+        x: number;
+        y: number;
+    };
+};
+
+function createDefaultBoard(name = "Board 1"): Board {
+    return {
+        id: crypto.randomUUID(),
+        name,
+        items: [],
+        scale: 0.25,
+        pos: { x: 260, y: 80 },
+    };
+}
+
 function ImageNode({
     item,
-    selectedId,
     setSelectedId,
     shapeRefs,
     updateItemPosition,
 }: {
     item: ImageItem;
-    selectedId: string | null;
     setSelectedId: (id: string) => void;
     shapeRefs: React.MutableRefObject<Record<string, Konva.Text | Konva.Image | null>>;
     updateItemPosition: (id: string, x: number, y: number) => void;
@@ -83,14 +102,52 @@ export default function App() {
     const trRef = useRef<Konva.Transformer | null>(null);
     const shapeRefs = useRef<Record<string, Konva.Text | Konva.Image | null>>({});
 
-    const [scale, setScale] = useState(0.25);
-    const [pos, setPos] = useState({ x: 260, y: 80 });
-    const [items, setItems] = useState<BoardItem[]>([]);
+    const [boards, setBoards] = useState<Board[]>(() => {
+        const saved = localStorage.getItem("board-app-boards");
+        if (!saved) return [createDefaultBoard()];
+
+        try {
+            const parsed = JSON.parse(saved) as Board[];
+            return parsed.length > 0 ? parsed : [createDefaultBoard()];
+        } catch {
+            return [createDefaultBoard()];
+        }
+    });
+
+    const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [isPanning, setIsPanning] = useState(false);
     const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
+    useEffect(() => {
+        if (!activeBoardId && boards.length > 0) {
+            setActiveBoardId(boards[0].id);
+        }
+    }, [activeBoardId, boards]);
+
+    useEffect(() => {
+        localStorage.setItem("board-app-boards", JSON.stringify(boards));
+    }, [boards]);
+
+    const activeBoard = boards.find((board) => board.id === activeBoardId) ?? null;
+    const scale = activeBoard?.scale ?? 0.25;
+    const pos = activeBoard?.pos ?? { x: 260, y: 80 };
+    const items = activeBoard?.items ?? [];
     const selectedItem = items.find((item) => item.id === selectedId) ?? null;
+
+    const updateActiveBoard = (updater: (board: Board) => Board) => {
+        if (!activeBoardId) return;
+
+        setBoards((prev) =>
+            prev.map((board) =>
+                board.id === activeBoardId ? updater(board) : board
+            )
+        );
+    };
+
+    useEffect(() => {
+        shapeRefs.current = {};
+    }, [activeBoardId]);
 
     useEffect(() => {
         if (!trRef.current) return;
@@ -106,13 +163,13 @@ export default function App() {
 
         trRef.current.nodes([node]);
         trRef.current.getLayer()?.batchDraw();
-    }, [selectedId, items]);
+    }, [selectedId, items, activeBoardId]);
 
     const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
         e.evt.preventDefault();
 
         const stage = e.target.getStage();
-        if (!stage) return;
+        if (!stage || !activeBoard) return;
 
         const pointer = stage.getPointerPosition();
         if (!pointer) return;
@@ -134,8 +191,18 @@ export default function App() {
             y: pointer.y - mousePointTo.y * clampedScale,
         };
 
-        setScale(clampedScale);
-        setPos(newPos);
+        updateActiveBoard((board) => ({
+            ...board,
+            scale: clampedScale,
+            pos: newPos,
+        }));
+    };
+
+    const addBoard = () => {
+        const newBoard = createDefaultBoard(`Board ${boards.length + 1}`);
+        setBoards((prev) => [...prev, newBoard]);
+        setActiveBoardId(newBoard.id);
+        setSelectedId(null);
     };
 
     const addText = () => {
@@ -149,7 +216,10 @@ export default function App() {
             width: 320,
         };
 
-        setItems((prev) => [...prev, newText]);
+        updateActiveBoard((board) => ({
+            ...board,
+            items: [...board.items, newText],
+        }));
         setSelectedId(newText.id);
     };
 
@@ -175,7 +245,10 @@ export default function App() {
                     src,
                 };
 
-                setItems((prev) => [...prev, newImage]);
+                updateActiveBoard((board) => ({
+                    ...board,
+                    items: [...board.items, newImage],
+                }));
                 setSelectedId(newImage.id);
             };
         };
@@ -190,17 +263,21 @@ export default function App() {
         const next = window.prompt("Edit text", item.text);
         if (next === null) return;
 
-        setItems((prev) =>
-            prev.map((i) =>
+        updateActiveBoard((board) => ({
+            ...board,
+            items: board.items.map((i) =>
                 i.id === id && i.type === "text" ? { ...i, text: next } : i
-            )
-        );
+            ),
+        }));
     };
 
     const updateItemPosition = (id: string, x: number, y: number) => {
-        setItems((prev) =>
-            prev.map((item) => (item.id === id ? { ...item, x, y } : item))
-        );
+        updateActiveBoard((board) => ({
+            ...board,
+            items: board.items.map((item) =>
+                item.id === id ? { ...item, x, y } : item
+            ),
+        }));
     };
 
     const applyTransform = () => {
@@ -218,8 +295,9 @@ export default function App() {
             node.scaleX(1);
             node.scaleY(1);
 
-            setItems((prev) =>
-                prev.map((i) =>
+            updateActiveBoard((board) => ({
+                ...board,
+                items: board.items.map((i) =>
                     i.id === selectedId && i.type === "image"
                         ? {
                             ...i,
@@ -229,8 +307,8 @@ export default function App() {
                             height: Math.max(20, node.height() * scaleY),
                         }
                         : i
-                )
-            );
+                ),
+            }));
         }
 
         if (item.type === "text") {
@@ -239,8 +317,9 @@ export default function App() {
             node.scaleX(1);
             node.scaleY(1);
 
-            setItems((prev) =>
-                prev.map((i) =>
+            updateActiveBoard((board) => ({
+                ...board,
+                items: board.items.map((i) =>
                     i.id === selectedId && i.type === "text"
                         ? {
                             ...i,
@@ -250,15 +329,15 @@ export default function App() {
                             fontSize: Math.max(8, i.fontSize * scaleX),
                         }
                         : i
-                )
-            );
+                ),
+            }));
         }
     };
 
     useEffect(() => {
         const handlePaste = (e: ClipboardEvent) => {
             const pastedItems = e.clipboardData?.items;
-            if (!pastedItems) return;
+            if (!pastedItems || !activeBoardId) return;
 
             for (const item of Array.from(pastedItems)) {
                 if (item.type.startsWith("image/")) {
@@ -270,7 +349,10 @@ export default function App() {
 
         const handleKeyDown = (e: KeyboardEvent) => {
             if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
-                setItems((prev) => prev.filter((item) => item.id !== selectedId));
+                updateActiveBoard((board) => ({
+                    ...board,
+                    items: board.items.filter((item) => item.id !== selectedId),
+                }));
                 setSelectedId(null);
             }
         };
@@ -282,7 +364,7 @@ export default function App() {
             window.removeEventListener("paste", handlePaste);
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [selectedId]);
+    }, [selectedId, activeBoardId]);
 
     const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
         const clickedOnStage = e.target === e.target.getStage();
@@ -303,14 +385,17 @@ export default function App() {
     };
 
     const handleStageMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-        if (!isPanning) return;
+        if (!isPanning || !activeBoard) return;
 
         const currentX = e.evt.clientX;
         const currentY = e.evt.clientY;
 
-        setPos((prev) => ({
-            x: prev.x + (currentX - lastPointer.x),
-            y: prev.y + (currentY - lastPointer.y),
+        updateActiveBoard((board) => ({
+            ...board,
+            pos: {
+                x: board.pos.x + (currentX - lastPointer.x),
+                y: board.pos.y + (currentY - lastPointer.y),
+            },
         }));
 
         setLastPointer({
@@ -344,9 +429,23 @@ export default function App() {
                     borderRight: "1px solid #c8c8c8",
                     padding: "16px",
                     boxSizing: "border-box",
+                    overflowY: "auto",
                 }}
             >
                 <h2 style={{ marginTop: 0, fontSize: "20px" }}>Board App</h2>
+
+                <button
+                    onClick={addBoard}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: "pointer",
+                        marginBottom: "12px",
+                    }}
+                >
+                    Add Board
+                </button>
 
                 <button
                     onClick={addText}
@@ -357,6 +456,7 @@ export default function App() {
                         cursor: "pointer",
                         marginBottom: "12px",
                     }}
+                    disabled={!activeBoard}
                 >
                     Add Text
                 </button>
@@ -367,12 +467,13 @@ export default function App() {
                         width: "100%",
                         padding: "12px",
                         fontSize: "16px",
-                        cursor: "pointer",
+                        cursor: activeBoard ? "pointer" : "not-allowed",
                         marginBottom: "12px",
                         background: "#fff",
                         border: "1px solid #bbb",
                         textAlign: "center",
                         boxSizing: "border-box",
+                        opacity: activeBoard ? 1 : 0.6,
                     }}
                 >
                     Add Image
@@ -380,6 +481,7 @@ export default function App() {
                         type="file"
                         accept="image/*"
                         style={{ display: "none" }}
+                        disabled={!activeBoard}
                         onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) {
@@ -389,6 +491,32 @@ export default function App() {
                         }}
                     />
                 </label>
+
+                <div style={{ marginBottom: "12px" }}>
+                    <div style={{ fontWeight: "bold", marginBottom: "8px" }}>Boards</div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        {boards.map((board) => (
+                            <button
+                                key={board.id}
+                                onClick={() => {
+                                    setActiveBoardId(board.id);
+                                    setSelectedId(null);
+                                }}
+                                style={{
+                                    width: "100%",
+                                    padding: "10px",
+                                    textAlign: "left",
+                                    cursor: "pointer",
+                                    border: "1px solid #bbb",
+                                    background: board.id === activeBoardId ? "#dbeafe" : "#fff",
+                                }}
+                            >
+                                {board.name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
 
                 <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
                     Left click item body to select/move.
@@ -404,6 +532,8 @@ export default function App() {
                     Ctrl + V to paste images.
                     <br />
                     Delete removes selected item.
+                    <br />
+                    Boards save automatically.
                 </p>
             </div>
 
@@ -463,7 +593,6 @@ export default function App() {
                                 <ImageNode
                                     key={item.id}
                                     item={item}
-                                    selectedId={selectedId}
                                     setSelectedId={setSelectedId}
                                     shapeRefs={shapeRefs}
                                     updateItemPosition={updateItemPosition}

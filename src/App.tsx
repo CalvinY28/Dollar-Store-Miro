@@ -202,6 +202,11 @@ export default function App() {
     const [renamingBoard, setRenamingBoard] = useState(false);
     const [renamingBoardValue, setRenamingBoardValue] = useState("");
 
+    const [darkMode, setDarkMode] = useState<boolean>(() => {
+        const saved = localStorage.getItem("board-app-dark-mode");
+        return saved === "true";
+    });
+
     useEffect(() => {
         if (!activeBoardId && boards.length > 0) {
             setActiveBoardId(boards[0].id);
@@ -211,6 +216,10 @@ export default function App() {
     useEffect(() => {
         localStorage.setItem("board-app-boards", JSON.stringify(boards));
     }, [boards]);
+
+    useEffect(() => {
+        localStorage.setItem("board-app-dark-mode", String(darkMode));
+    }, [darkMode]);
 
     const activeBoard = boards.find((board) => board.id === activeBoardId) ?? null;
     const activeBoardIndex = boards.findIndex((board) => board.id === activeBoardId);
@@ -804,6 +813,12 @@ export default function App() {
             }
 
             if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                if (key === "d") {
+                    e.preventDefault();
+                    setDarkMode((prev) => !prev);
+                    return;
+                }
+
                 if (key === "q") {
                     e.preventDefault();
                     addText();
@@ -909,8 +924,8 @@ export default function App() {
             fontSize: `${editingTextItem.fontSize * scale}px`,
             lineHeight: "1.2",
             fontFamily: "Arial, sans-serif",
-            color: "#000",
-            background: "#fff",
+            color: darkMode ? "#f5f5f5" : "#000",
+            background: darkMode ? "#2b2b2b" : "#fff",
             border: "1px solid #3b82f6",
             padding: "0",
             margin: "0",
@@ -921,7 +936,7 @@ export default function App() {
             boxSizing: "border-box" as const,
             zIndex: 20,
         };
-    }, [editingTextItem, pos, scale]);
+    }, [editingTextItem, pos, scale, darkMode]);
 
     return (
         <div
@@ -929,7 +944,7 @@ export default function App() {
                 width: "100vw",
                 height: "100vh",
                 overflow: "hidden",
-                background: "#d9d9d9",
+                background: darkMode ? "#1f1f1f" : "#d9d9d9",
                 position: "relative",
             }}
             onMouseDown={(e) => {
@@ -956,8 +971,9 @@ export default function App() {
                     top: 12,
                     left: 12,
                     zIndex: 15,
-                    background: "rgba(255,255,255,0.9)",
-                    border: "1px solid #bbb",
+                    background: darkMode ? "rgba(30,30,30,0.92)" : "rgba(255,255,255,0.9)",
+                    border: darkMode ? "1px solid #555" : "1px solid #bbb",
+                    color: darkMode ? "#f3f3f3" : "#111",
                     padding: "8px 10px",
                     fontSize: "12px",
                     lineHeight: 1.4,
@@ -989,6 +1005,9 @@ export default function App() {
                             width: "100%",
                             boxSizing: "border-box",
                             fontSize: "12px",
+                            background: darkMode ? "#2a2a2a" : "#fff",
+                            color: darkMode ? "#f3f3f3" : "#111",
+                            border: darkMode ? "1px solid #666" : "1px solid #bbb",
                         }}
                     />
                 ) : (
@@ -998,12 +1017,13 @@ export default function App() {
                         style={{
                             marginTop: "4px",
                             cursor: "text",
-                            color: "#111",
+                            color: darkMode ? "#f3f3f3" : "#111",
                         }}
                     >
                         {activeBoard ? activeBoard.name : ""}
                     </div>
                 )}
+
             </div>
 
             <Stage
@@ -1027,8 +1047,8 @@ export default function App() {
                         y={0}
                         width={BOARD_WIDTH}
                         height={BOARD_HEIGHT}
-                        fill="white"
-                        stroke="#999"
+                        fill={darkMode ? "#2b2b2b" : "white"}
+                        stroke={darkMode ? "#666" : "#999"}
                         strokeWidth={2}
                     />
 
@@ -1047,7 +1067,7 @@ export default function App() {
                                     text={item.text}
                                     fontSize={item.fontSize}
                                     width={item.width}
-                                    fill="black"
+                                    fill={darkMode ? "#f5f5f5" : "black"}
                                     visible={!isEditing}
                                     draggable={!isEditing}
                                     onMouseDown={(e) => selectItem(e, item.id)}

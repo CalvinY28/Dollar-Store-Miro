@@ -7,6 +7,7 @@ import {
     Image as KonvaImage,
     Transformer,
 } from "react-konva";
+import { jsPDF } from "jspdf";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import "./App.css";
@@ -334,6 +335,41 @@ export default function App() {
         }
     };
 
+    const exportBoardAsPDF = () => {
+        const stage = stageRef.current;
+        if (!stage || !activeBoard) return;
+
+        const previousScaleX = stage.scaleX();
+        const previousScaleY = stage.scaleY();
+        const previousX = stage.x();
+        const previousY = stage.y();
+
+        stage.scale({ x: 1, y: 1 });
+        stage.position({ x: 0, y: 0 });
+        stage.batchDraw();
+
+        const dataURL = stage.toDataURL({
+            x: 0,
+            y: 0,
+            width: BOARD_WIDTH,
+            height: BOARD_HEIGHT,
+            pixelRatio: 3,
+        });
+
+        stage.scale({ x: previousScaleX, y: previousScaleY });
+        stage.position({ x: previousX, y: previousY });
+        stage.batchDraw();
+
+        const pdf = new jsPDF({
+            orientation: BOARD_WIDTH > BOARD_HEIGHT ? "landscape" : "portrait",
+            unit: "px",
+            format: [BOARD_WIDTH, BOARD_HEIGHT],
+        });
+
+        pdf.addImage(dataURL, "PNG", 0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+        pdf.save(`${activeBoard.name}.pdf`);
+    };
+
     useEffect(() => {
         const handlePaste = (e: ClipboardEvent) => {
             const pastedItems = e.clipboardData?.items;
@@ -492,6 +528,20 @@ export default function App() {
                     />
                 </label>
 
+                <button
+                    onClick={exportBoardAsPDF}
+                    style={{
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: "pointer",
+                        marginBottom: "12px",
+                    }}
+                    disabled={!activeBoard}
+                >
+                    Export PDF
+                </button>
+
                 <div style={{ marginBottom: "12px" }}>
                     <div style={{ fontWeight: "bold", marginBottom: "8px" }}>Boards</div>
 
@@ -534,6 +584,8 @@ export default function App() {
                     Delete removes selected item.
                     <br />
                     Boards save automatically.
+                    <br />
+                    Export saves the full board as PDF.
                 </p>
             </div>
 

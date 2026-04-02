@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Rect, Text, Image as KonvaImage } from "react-konva";
+import {
+    Stage,
+    Layer,
+    Rect,
+    Text,
+    Image as KonvaImage,
+    Transformer,
+} from "react-konva";
+import type Konva from "konva";
+import type { KonvaEventObject } from "konva/lib/Node";
 import "./App.css";
 
 const BOARD_WIDTH = 6000;
@@ -8,6 +17,7 @@ const SIDEBAR_WIDTH = 220;
 
 type TextItem = {
     id: string;
+    type: "text";
     x: number;
     y: number;
     text: string;
@@ -17,6 +27,7 @@ type TextItem = {
 
 type ImageItem = {
     id: string;
+    type: "image";
     x: number;
     y: number;
     width: number;
@@ -24,12 +35,20 @@ type ImageItem = {
     src: string;
 };
 
-function BoardImage({
+type BoardItem = TextItem | ImageItem;
+
+function ImageNode({
     item,
-    onMove,
+    selectedId,
+    setSelectedId,
+    shapeRefs,
+    updateItemPosition,
 }: {
     item: ImageItem;
-    onMove: (id: string, x: number, y: number) => void;
+    selectedId: string | null;
+    setSelectedId: (id: string) => void;
+    shapeRefs: React.MutableRefObject<Record<string, Konva.Text | Konva.Image | null>>;
+    updateItemPosition: (id: string, x: number, y: number) => void;
 }) {
     const [image, setImage] = useState<HTMLImageElement | null>(null);
 
@@ -41,38 +60,65 @@ function BoardImage({
 
     return (
         <KonvaImage
+            ref={(node) => {
+                shapeRefs.current[item.id] = node;
+            }}
             image={image}
             x={item.x}
             y={item.y}
             width={item.width}
             height={item.height}
             draggable
-            onDragEnd={(e) => {
-                onMove(item.id, e.target.x(), e.target.y());
+            onMouseDown={() => setSelectedId(item.id)}
+            onClick={() => setSelectedId(item.id)}
+            onDragEnd={(e: KonvaEventObject<DragEvent>) => {
+                updateItemPosition(item.id, e.target.x(), e.target.y());
             }}
         />
     );
 }
 
 export default function App() {
-    const stageRef = useRef<any>(null);
+    const stageRef = useRef<Konva.Stage | null>(null);
+    const trRef = useRef<Konva.Transformer | null>(null);
+    const shapeRefs = useRef<Record<string, Konva.Text | Konva.Image | null>>({});
 
     const [scale, setScale] = useState(0.25);
     const [pos, setPos] = useState({ x: 260, y: 80 });
-    const [texts, setTexts] = useState<TextItem[]>([]);
-    const [images, setImages] = useState<ImageItem[]>([]);
+    const [items, setItems] = useState<BoardItem[]>([]);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
     const [isPanning, setIsPanning] = useState(false);
     const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
-    const handleWheel = (e: any) => {
+    const selectedItem = items.find((item) => item.id === selectedId) ?? null;
+
+    useEffect(() => {
+        if (!trRef.current) return;
+
+        if (!selectedId) {
+            trRef.current.nodes([]);
+            trRef.current.getLayer()?.batchDraw();
+            return;
+        }
+
+        const node = shapeRefs.current[selectedId];
+        if (!node) return;
+
+        trRef.current.nodes([node]);
+        trRef.current.getLayer()?.batchDraw();
+    }, [selectedId, items]);
+
+    const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
         e.evt.preventDefault();
 
-        const scaleBy = 1.05;
         const stage = e.target.getStage();
-        const oldScale = scale;
-        const pointer = stage.getPointerPosition();
+        if (!stage) return;
 
+        const pointer = stage.getPointerPosition();
         if (!pointer) return;
+
+        const oldScale = scale;
+        const scaleBy = 1.05;
 
         const mousePointTo = {
             x: (pointer.x - pos.x) / oldScale,
@@ -95,6 +141,7 @@ export default function App() {
     const addText = () => {
         const newText: TextItem = {
             id: crypto.randomUUID(),
+            type: "text",
             x: 300,
             y: 200,
             text: "Double-click to edit",
@@ -102,33 +149,8 @@ export default function App() {
             width: 320,
         };
 
-        setTexts((prev) => [...prev, newText]);
-    };
-
-    const updateTextPosition = (id: string, x: number, y: number) => {
-        setTexts((prev) =>
-            prev.map((item) => (item.id === id ? { ...item, x, y } : item))
-        );
-    };
-
-    const editText = (id: string) => {
-        const current = texts.find((t) => t.id === id);
-        if (!current) return;
-
-        const nextText = window.prompt("Edit text", current.text);
-        if (nextText === null) return;
-
-        setTexts((prev) =>
-            prev.map((item) =>
-                item.id === id ? { ...item, text: nextText } : item
-            )
-        );
-    };
-
-    const updateImagePosition = (id: string, x: number, y: number) => {
-        setImages((prev) =>
-            prev.map((item) => (item.id === id ? { ...item, x, y } : item))
-        );
+        setItems((prev) => [...prev, newText]);
+        setSelectedId(newText.id);
     };
 
     const addImageFromFile = (file: File) => {
@@ -136,50 +158,140 @@ export default function App() {
 
         reader.onload = () => {
             const src = String(reader.result);
-
             const img = new window.Image();
             img.src = src;
 
             img.onload = () => {
                 const maxWidth = 500;
-                const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+                const imageScale = img.width > maxWidth ? maxWidth / img.width : 1;
 
                 const newImage: ImageItem = {
                     id: crypto.randomUUID(),
+                    type: "image",
                     x: 300,
                     y: 300,
-                    width: img.width * scale,
-                    height: img.height * scale,
+                    width: img.width * imageScale,
+                    height: img.height * imageScale,
                     src,
                 };
 
-                setImages((prev) => [...prev, newImage]);
+                setItems((prev) => [...prev, newImage]);
+                setSelectedId(newImage.id);
             };
         };
 
         reader.readAsDataURL(file);
     };
 
+    const editText = (id: string) => {
+        const item = items.find((i) => i.id === id && i.type === "text");
+        if (!item || item.type !== "text") return;
+
+        const next = window.prompt("Edit text", item.text);
+        if (next === null) return;
+
+        setItems((prev) =>
+            prev.map((i) =>
+                i.id === id && i.type === "text" ? { ...i, text: next } : i
+            )
+        );
+    };
+
+    const updateItemPosition = (id: string, x: number, y: number) => {
+        setItems((prev) =>
+            prev.map((item) => (item.id === id ? { ...item, x, y } : item))
+        );
+    };
+
+    const applyTransform = () => {
+        if (!selectedId) return;
+
+        const node = shapeRefs.current[selectedId];
+        const item = items.find((i) => i.id === selectedId);
+
+        if (!node || !item) return;
+
+        if (item.type === "image") {
+            const scaleX = node.scaleX();
+            const scaleY = node.scaleY();
+
+            node.scaleX(1);
+            node.scaleY(1);
+
+            setItems((prev) =>
+                prev.map((i) =>
+                    i.id === selectedId && i.type === "image"
+                        ? {
+                            ...i,
+                            x: node.x(),
+                            y: node.y(),
+                            width: Math.max(20, node.width() * scaleX),
+                            height: Math.max(20, node.height() * scaleY),
+                        }
+                        : i
+                )
+            );
+        }
+
+        if (item.type === "text") {
+            const scaleX = node.scaleX();
+
+            node.scaleX(1);
+            node.scaleY(1);
+
+            setItems((prev) =>
+                prev.map((i) =>
+                    i.id === selectedId && i.type === "text"
+                        ? {
+                            ...i,
+                            x: node.x(),
+                            y: node.y(),
+                            width: Math.max(80, node.width() * scaleX),
+                            fontSize: Math.max(8, i.fontSize * scaleX),
+                        }
+                        : i
+                )
+            );
+        }
+    };
+
     useEffect(() => {
         const handlePaste = (e: ClipboardEvent) => {
-            const items = e.clipboardData?.items;
-            if (!items) return;
+            const pastedItems = e.clipboardData?.items;
+            if (!pastedItems) return;
 
-            for (const item of Array.from(items)) {
+            for (const item of Array.from(pastedItems)) {
                 if (item.type.startsWith("image/")) {
                     const file = item.getAsFile();
-                    if (file) {
-                        addImageFromFile(file);
-                    }
+                    if (file) addImageFromFile(file);
                 }
             }
         };
 
-        window.addEventListener("paste", handlePaste);
-        return () => window.removeEventListener("paste", handlePaste);
-    }, []);
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+                setItems((prev) => prev.filter((item) => item.id !== selectedId));
+                setSelectedId(null);
+            }
+        };
 
-    const handleMouseDown = (e: any) => {
+        window.addEventListener("paste", handlePaste);
+        window.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            window.removeEventListener("paste", handlePaste);
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [selectedId]);
+
+    const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+        const clickedOnStage = e.target === e.target.getStage();
+        const clickedOnBoardBackground = e.target.name() === "board-background";
+
+        if (clickedOnStage || clickedOnBoardBackground) {
+            setSelectedId(null);
+        }
+
         if (e.evt.button === 1) {
             e.evt.preventDefault();
             setIsPanning(true);
@@ -190,18 +302,15 @@ export default function App() {
         }
     };
 
-    const handleMouseMove = (e: any) => {
+    const handleStageMouseMove = (e: KonvaEventObject<MouseEvent>) => {
         if (!isPanning) return;
 
         const currentX = e.evt.clientX;
         const currentY = e.evt.clientY;
 
-        const dx = currentX - lastPointer.x;
-        const dy = currentY - lastPointer.y;
-
         setPos((prev) => ({
-            x: prev.x + dx,
-            y: prev.y + dy,
+            x: prev.x + (currentX - lastPointer.x),
+            y: prev.y + (currentY - lastPointer.y),
         }));
 
         setLastPointer({
@@ -282,7 +391,9 @@ export default function App() {
                 </label>
 
                 <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
-                    Left click drag text/images to move.
+                    Left click item body to select/move.
+                    <br />
+                    Drag resize handles to resize.
                     <br />
                     Middle click drag to pan.
                     <br />
@@ -291,6 +402,8 @@ export default function App() {
                     Double-click text to edit.
                     <br />
                     Ctrl + V to paste images.
+                    <br />
+                    Delete removes selected item.
                 </p>
             </div>
 
@@ -303,15 +416,15 @@ export default function App() {
                     y={pos.y}
                     scaleX={scale}
                     scaleY={scale}
-                    draggable={false}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
+                    onMouseDown={handleStageMouseDown}
+                    onMouseMove={handleStageMouseMove}
                     onMouseUp={stopPanning}
                     onMouseLeave={stopPanning}
                     onWheel={handleWheel}
                 >
                     <Layer>
                         <Rect
+                            name="board-background"
                             x={0}
                             y={0}
                             width={BOARD_WIDTH}
@@ -321,30 +434,54 @@ export default function App() {
                             strokeWidth={2}
                         />
 
-                        {images.map((item) => (
-                            <BoardImage
-                                key={item.id}
-                                item={item}
-                                onMove={updateImagePosition}
-                            />
-                        ))}
+                        {items.map((item) => {
+                            if (item.type === "text") {
+                                return (
+                                    <Text
+                                        key={item.id}
+                                        ref={(node) => {
+                                            shapeRefs.current[item.id] = node;
+                                        }}
+                                        x={item.x}
+                                        y={item.y}
+                                        text={item.text}
+                                        fontSize={item.fontSize}
+                                        width={item.width}
+                                        fill="black"
+                                        draggable
+                                        onMouseDown={() => setSelectedId(item.id)}
+                                        onClick={() => setSelectedId(item.id)}
+                                        onDragEnd={(e: KonvaEventObject<DragEvent>) => {
+                                            updateItemPosition(item.id, e.target.x(), e.target.y());
+                                        }}
+                                        onDblClick={() => editText(item.id)}
+                                    />
+                                );
+                            }
 
-                        {texts.map((item) => (
-                            <Text
-                                key={item.id}
-                                x={item.x}
-                                y={item.y}
-                                text={item.text}
-                                fontSize={item.fontSize}
-                                width={item.width}
-                                fill="black"
-                                draggable
-                                onDragEnd={(e) => {
-                                    updateTextPosition(item.id, e.target.x(), e.target.y());
-                                }}
-                                onDblClick={() => editText(item.id)}
-                            />
-                        ))}
+                            return (
+                                <ImageNode
+                                    key={item.id}
+                                    item={item}
+                                    selectedId={selectedId}
+                                    setSelectedId={setSelectedId}
+                                    shapeRefs={shapeRefs}
+                                    updateItemPosition={updateItemPosition}
+                                />
+                            );
+                        })}
+
+                        <Transformer
+                            ref={trRef}
+                            rotateEnabled={false}
+                            keepRatio={false}
+                            enabledAnchors={
+                                selectedItem?.type === "text"
+                                    ? ["middle-left", "middle-right"]
+                                    : undefined
+                            }
+                            onTransformEnd={applyTransform}
+                        />
                     </Layer>
                 </Stage>
             </div>

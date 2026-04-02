@@ -214,7 +214,19 @@ export default function App() {
     }, [activeBoardId, boards]);
 
     useEffect(() => {
-        localStorage.setItem("board-app-boards", JSON.stringify(boards));
+        try {
+            const boardsToSave = boards.map((board) => ({
+                ...board,
+                history: {
+                    past: [],
+                    future: [],
+                },
+            }));
+
+            localStorage.setItem("board-app-boards", JSON.stringify(boardsToSave));
+        } catch (error) {
+            console.error("Failed to save boards to local storage:", error);
+        }
     }, [boards]);
 
     useEffect(() => {

@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { Stage, Layer, Rect, Text } from "react-konva";
+import { useEffect, useRef, useState } from "react";
+import { Stage, Layer, Rect, Text, Image as KonvaImage } from "react-konva";
 import "./App.css";
 
 const BOARD_WIDTH = 6000;
@@ -15,12 +15,52 @@ type TextItem = {
     width: number;
 };
 
+type ImageItem = {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    src: string;
+};
+
+function BoardImage({
+    item,
+    onMove,
+}: {
+    item: ImageItem;
+    onMove: (id: string, x: number, y: number) => void;
+}) {
+    const [image, setImage] = useState<HTMLImageElement | null>(null);
+
+    useEffect(() => {
+        const img = new window.Image();
+        img.src = item.src;
+        img.onload = () => setImage(img);
+    }, [item.src]);
+
+    return (
+        <KonvaImage
+            image={image}
+            x={item.x}
+            y={item.y}
+            width={item.width}
+            height={item.height}
+            draggable
+            onDragEnd={(e) => {
+                onMove(item.id, e.target.x(), e.target.y());
+            }}
+        />
+    );
+}
+
 export default function App() {
     const stageRef = useRef<any>(null);
 
     const [scale, setScale] = useState(0.25);
     const [pos, setPos] = useState({ x: 260, y: 80 });
     const [texts, setTexts] = useState<TextItem[]>([]);
+    const [images, setImages] = useState<ImageItem[]>([]);
     const [isPanning, setIsPanning] = useState(false);
     const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
@@ -85,6 +125,60 @@ export default function App() {
         );
     };
 
+    const updateImagePosition = (id: string, x: number, y: number) => {
+        setImages((prev) =>
+            prev.map((item) => (item.id === id ? { ...item, x, y } : item))
+        );
+    };
+
+    const addImageFromFile = (file: File) => {
+        const reader = new FileReader();
+
+        reader.onload = () => {
+            const src = String(reader.result);
+
+            const img = new window.Image();
+            img.src = src;
+
+            img.onload = () => {
+                const maxWidth = 500;
+                const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+
+                const newImage: ImageItem = {
+                    id: crypto.randomUUID(),
+                    x: 300,
+                    y: 300,
+                    width: img.width * scale,
+                    height: img.height * scale,
+                    src,
+                };
+
+                setImages((prev) => [...prev, newImage]);
+            };
+        };
+
+        reader.readAsDataURL(file);
+    };
+
+    useEffect(() => {
+        const handlePaste = (e: ClipboardEvent) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+
+            for (const item of Array.from(items)) {
+                if (item.type.startsWith("image/")) {
+                    const file = item.getAsFile();
+                    if (file) {
+                        addImageFromFile(file);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener("paste", handlePaste);
+        return () => window.removeEventListener("paste", handlePaste);
+    }, []);
+
     const handleMouseDown = (e: any) => {
         if (e.evt.button === 1) {
             e.evt.preventDefault();
@@ -129,6 +223,9 @@ export default function App() {
                 display: "flex",
                 background: "#d9d9d9",
             }}
+            onMouseDown={(e) => {
+                if (e.button === 1) e.preventDefault();
+            }}
         >
             <div
                 style={{
@@ -155,14 +252,45 @@ export default function App() {
                     Add Text
                 </button>
 
+                <label
+                    style={{
+                        display: "block",
+                        width: "100%",
+                        padding: "12px",
+                        fontSize: "16px",
+                        cursor: "pointer",
+                        marginBottom: "12px",
+                        background: "#fff",
+                        border: "1px solid #bbb",
+                        textAlign: "center",
+                        boxSizing: "border-box",
+                    }}
+                >
+                    Add Image
+                    <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                                addImageFromFile(file);
+                                e.target.value = "";
+                            }
+                        }}
+                    />
+                </label>
+
                 <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
-                    Left click drag text to move it.
+                    Left click drag text/images to move.
                     <br />
                     Middle click drag to pan.
                     <br />
                     Scroll to zoom.
                     <br />
                     Double-click text to edit.
+                    <br />
+                    Ctrl + V to paste images.
                 </p>
             </div>
 
@@ -192,6 +320,14 @@ export default function App() {
                             stroke="#999"
                             strokeWidth={2}
                         />
+
+                        {images.map((item) => (
+                            <BoardImage
+                                key={item.id}
+                                item={item}
+                                onMove={updateImagePosition}
+                            />
+                        ))}
 
                         {texts.map((item) => (
                             <Text

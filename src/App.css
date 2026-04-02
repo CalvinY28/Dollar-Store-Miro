@@ -7,3 +7,7 @@ body,
   overflow: hidden;
   font-family: Arial, sans-serif;
 }
+
+canvas {
+  user-select: none;
+}

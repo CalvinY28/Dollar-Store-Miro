@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     Stage,
     Layer,
@@ -99,9 +99,12 @@ function ImageNode({
 }
 
 export default function App() {
+    const appRef = useRef<HTMLDivElement | null>(null);
     const stageRef = useRef<Konva.Stage | null>(null);
     const trRef = useRef<Konva.Transformer | null>(null);
     const shapeRefs = useRef<Record<string, Konva.Text | Konva.Image | null>>({});
+    const textEditorRef = useRef<HTMLTextAreaElement | null>(null);
+    const boardRenameRef = useRef<HTMLInputElement | null>(null);
 
     const [boards, setBoards] = useState<Board[]>(() => {
         const saved = localStorage.getItem("board-app-boards");
@@ -120,6 +123,11 @@ export default function App() {
     const [isPanning, setIsPanning] = useState(false);
     const [lastPointer, setLastPointer] = useState({ x: 0, y: 0 });
 
+    const [editingTextId, setEditingTextId] = useState<string | null>(null);
+    const [editingTextValue, setEditingTextValue] = useState("");
+    const [renamingBoardId, setRenamingBoardId] = useState<string | null>(null);
+    const [renamingBoardValue, setRenamingBoardValue] = useState("");
+
     useEffect(() => {
         if (!activeBoardId && boards.length > 0) {
             setActiveBoardId(boards[0].id);
@@ -135,6 +143,12 @@ export default function App() {
     const pos = activeBoard?.pos ?? { x: 260, y: 80 };
     const items = activeBoard?.items ?? [];
     const selectedItem = items.find((item) => item.id === selectedId) ?? null;
+
+    const editingTextItem = useMemo(() => {
+        if (!editingTextId) return null;
+        const item = items.find((i) => i.id === editingTextId && i.type === "text");
+        return item && item.type === "text" ? item : null;
+    }, [editingTextId, items]);
 
     const updateActiveBoard = (updater: (board: Board) => Board) => {
         if (!activeBoardId) return;
@@ -153,7 +167,7 @@ export default function App() {
     useEffect(() => {
         if (!trRef.current) return;
 
-        if (!selectedId) {
+        if (!selectedId || editingTextId === selectedId) {
             trRef.current.nodes([]);
             trRef.current.getLayer()?.batchDraw();
             return;
@@ -164,13 +178,27 @@ export default function App() {
 
         trRef.current.nodes([node]);
         trRef.current.getLayer()?.batchDraw();
-    }, [selectedId, items, activeBoardId]);
+    }, [selectedId, items, activeBoardId, editingTextId]);
+
+    useEffect(() => {
+        if (editingTextId && textEditorRef.current) {
+            textEditorRef.current.focus();
+            textEditorRef.current.select();
+        }
+    }, [editingTextId]);
+
+    useEffect(() => {
+        if (renamingBoardId && boardRenameRef.current) {
+            boardRenameRef.current.focus();
+            boardRenameRef.current.select();
+        }
+    }, [renamingBoardId]);
 
     const handleWheel = (e: KonvaEventObject<WheelEvent>) => {
         e.evt.preventDefault();
 
         const stage = e.target.getStage();
-        if (!stage || !activeBoard) return;
+        if (!stage || !activeBoard || editingTextId) return;
 
         const pointer = stage.getPointerPosition();
         if (!pointer) return;
@@ -204,21 +232,38 @@ export default function App() {
         setBoards((prev) => [...prev, newBoard]);
         setActiveBoardId(newBoard.id);
         setSelectedId(null);
+        setEditingTextId(null);
     };
 
-    const renameActiveBoard = () => {
-        if (!activeBoard) return;
+    const startRenamingBoard = (board: Board) => {
+        setRenamingBoardId(board.id);
+        setRenamingBoardValue(board.name);
+    };
 
-        const nextName = window.prompt("Rename board", activeBoard.name);
-        if (nextName === null) return;
+    const saveBoardRename = () => {
+        if (!renamingBoardId) return;
 
-        const trimmedName = nextName.trim();
-        if (!trimmedName) return;
+        const trimmed = renamingBoardValue.trim();
 
-        updateActiveBoard((board) => ({
-            ...board,
-            name: trimmedName,
-        }));
+        if (!trimmed) {
+            setRenamingBoardId(null);
+            setRenamingBoardValue("");
+            return;
+        }
+
+        setBoards((prev) =>
+            prev.map((board) =>
+                board.id === renamingBoardId ? { ...board, name: trimmed } : board
+            )
+        );
+
+        setRenamingBoardId(null);
+        setRenamingBoardValue("");
+    };
+
+    const cancelBoardRename = () => {
+        setRenamingBoardId(null);
+        setRenamingBoardValue("");
     };
 
     const deleteActiveBoard = () => {
@@ -244,6 +289,7 @@ export default function App() {
 
         setActiveBoardId(nextBoard ? nextBoard.id : null);
         setSelectedId(null);
+        setEditingTextId(null);
     };
 
     const addText = () => {
@@ -297,19 +343,32 @@ export default function App() {
         reader.readAsDataURL(file);
     };
 
-    const editText = (id: string) => {
+    const startEditingText = (id: string) => {
         const item = items.find((i) => i.id === id && i.type === "text");
         if (!item || item.type !== "text") return;
 
-        const next = window.prompt("Edit text", item.text);
-        if (next === null) return;
+        setSelectedId(id);
+        setEditingTextId(id);
+        setEditingTextValue(item.text);
+    };
+
+    const saveTextEdit = () => {
+        if (!editingTextId) return;
 
         updateActiveBoard((board) => ({
             ...board,
             items: board.items.map((i) =>
-                i.id === id && i.type === "text" ? { ...i, text: next } : i
+                i.id === editingTextId && i.type === "text"
+                    ? { ...i, text: editingTextValue }
+                    : i
             ),
         }));
+
+        setEditingTextId(null);
+    };
+
+    const cancelTextEdit = () => {
+        setEditingTextId(null);
     };
 
     const updateItemPosition = (id: string, x: number, y: number) => {
@@ -424,6 +483,8 @@ export default function App() {
         };
 
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (editingTextId) return;
+
             if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
                 updateActiveBoard((board) => ({
                     ...board,
@@ -440,9 +501,11 @@ export default function App() {
             window.removeEventListener("paste", handlePaste);
             window.removeEventListener("keydown", handleKeyDown);
         };
-    }, [selectedId, activeBoardId]);
+    }, [selectedId, activeBoardId, editingTextId]);
 
     const handleStageMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+        if (editingTextId) return;
+
         const clickedOnStage = e.target === e.target.getStage();
         const clickedOnBoardBackground = e.target.name() === "board-background";
 
@@ -461,7 +524,7 @@ export default function App() {
     };
 
     const handleStageMouseMove = (e: KonvaEventObject<MouseEvent>) => {
-        if (!isPanning || !activeBoard) return;
+        if (!isPanning || !activeBoard || editingTextId) return;
 
         const currentX = e.evt.clientX;
         const currentY = e.evt.clientY;
@@ -484,14 +547,45 @@ export default function App() {
         setIsPanning(false);
     };
 
+    const textEditorStyle = useMemo(() => {
+        if (!editingTextItem) return null;
+
+        const left = SIDEBAR_WIDTH + pos.x + editingTextItem.x * scale;
+        const top = pos.y + editingTextItem.y * scale;
+
+        return {
+            position: "absolute" as const,
+            left: `${left}px`,
+            top: `${top}px`,
+            width: `${Math.max(80, editingTextItem.width * scale)}px`,
+            minHeight: `${Math.max(24, editingTextItem.fontSize * scale * 1.3)}px`,
+            fontSize: `${editingTextItem.fontSize * scale}px`,
+            lineHeight: "1.2",
+            fontFamily: "Arial, sans-serif",
+            color: "#000",
+            background: "#fff",
+            border: "1px solid #3b82f6",
+            padding: "0",
+            margin: "0",
+            outline: "none",
+            resize: "none" as const,
+            overflow: "hidden" as const,
+            whiteSpace: "pre-wrap" as const,
+            boxSizing: "border-box" as const,
+            zIndex: 20,
+        };
+    }, [editingTextItem, pos, scale]);
+
     return (
         <div
+            ref={appRef}
             style={{
                 width: "100vw",
                 height: "100vh",
                 overflow: "hidden",
                 display: "flex",
                 background: "#d9d9d9",
+                position: "relative",
             }}
             onMouseDown={(e) => {
                 if (e.button === 1) e.preventDefault();
@@ -521,20 +615,6 @@ export default function App() {
                     }}
                 >
                     Add Board
-                </button>
-
-                <button
-                    onClick={renameActiveBoard}
-                    style={{
-                        width: "100%",
-                        padding: "12px",
-                        fontSize: "16px",
-                        cursor: "pointer",
-                        marginBottom: "12px",
-                    }}
-                    disabled={!activeBoard}
-                >
-                    Rename Board
                 </button>
 
                 <button
@@ -615,29 +695,69 @@ export default function App() {
                     <div style={{ fontWeight: "bold", marginBottom: "8px" }}>Boards</div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                        {boards.map((board) => (
-                            <button
-                                key={board.id}
-                                onClick={() => {
-                                    setActiveBoardId(board.id);
-                                    setSelectedId(null);
-                                }}
-                                style={{
-                                    width: "100%",
-                                    padding: "10px",
-                                    textAlign: "left",
-                                    cursor: "pointer",
-                                    border: "1px solid #bbb",
-                                    background: board.id === activeBoardId ? "#dbeafe" : "#fff",
-                                }}
-                            >
-                                {board.name}
-                            </button>
-                        ))}
+                        {boards.map((board) => {
+                            const isRenaming = renamingBoardId === board.id;
+
+                            if (isRenaming) {
+                                return (
+                                    <input
+                                        key={board.id}
+                                        ref={boardRenameRef}
+                                        value={renamingBoardValue}
+                                        onChange={(e) => setRenamingBoardValue(e.target.value)}
+                                        onBlur={saveBoardRename}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                e.preventDefault();
+                                                saveBoardRename();
+                                            }
+                                            if (e.key === "Escape") {
+                                                e.preventDefault();
+                                                cancelBoardRename();
+                                            }
+                                        }}
+                                        style={{
+                                            width: "100%",
+                                            padding: "10px",
+                                            border: "1px solid #3b82f6",
+                                            boxSizing: "border-box",
+                                            fontSize: "14px",
+                                        }}
+                                    />
+                                );
+                            }
+
+                            return (
+                                <button
+                                    key={board.id}
+                                    onClick={() => {
+                                        setActiveBoardId(board.id);
+                                        setSelectedId(null);
+                                        setEditingTextId(null);
+                                    }}
+                                    onDoubleClick={() => startRenamingBoard(board)}
+                                    style={{
+                                        width: "100%",
+                                        padding: "10px",
+                                        textAlign: "left",
+                                        cursor: "pointer",
+                                        border: "1px solid #bbb",
+                                        background: board.id === activeBoardId ? "#dbeafe" : "#fff",
+                                    }}
+                                    title="Double-click to rename"
+                                >
+                                    {board.name}
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
 
                 <p style={{ fontSize: "14px", lineHeight: 1.4 }}>
+                    Double-click text to edit inline.
+                    <br />
+                    Double-click board names to rename.
+                    <br />
                     Left click item body to select/move.
                     <br />
                     Drag resize handles to resize.
@@ -646,15 +766,11 @@ export default function App() {
                     <br />
                     Scroll to zoom.
                     <br />
-                    Double-click text to edit.
-                    <br />
                     Ctrl + V to paste images.
                     <br />
                     Delete removes selected item.
                     <br />
                     Boards save automatically.
-                    <br />
-                    Export saves the full board as PDF.
                 </p>
             </div>
 
@@ -687,6 +803,8 @@ export default function App() {
 
                         {items.map((item) => {
                             if (item.type === "text") {
+                                const isEditing = editingTextId === item.id;
+
                                 return (
                                     <Text
                                         key={item.id}
@@ -699,13 +817,14 @@ export default function App() {
                                         fontSize={item.fontSize}
                                         width={item.width}
                                         fill="black"
-                                        draggable
+                                        visible={!isEditing}
+                                        draggable={!isEditing}
                                         onMouseDown={() => setSelectedId(item.id)}
                                         onClick={() => setSelectedId(item.id)}
                                         onDragEnd={(e: KonvaEventObject<DragEvent>) => {
                                             updateItemPosition(item.id, e.target.x(), e.target.y());
                                         }}
-                                        onDblClick={() => editText(item.id)}
+                                        onDblClick={() => startEditingText(item.id)}
                                     />
                                 );
                             }
@@ -735,6 +854,27 @@ export default function App() {
                     </Layer>
                 </Stage>
             </div>
+
+            {editingTextItem && textEditorStyle && (
+                <textarea
+                    ref={textEditorRef}
+                    value={editingTextValue}
+                    onChange={(e) => setEditingTextValue(e.target.value)}
+                    onBlur={saveTextEdit}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            saveTextEdit();
+                        }
+                        if (e.key === "Escape") {
+                            e.preventDefault();
+                            cancelTextEdit();
+                        }
+                    }}
+                    style={textEditorStyle}
+                />
+            )}
         </div>
     );
 }

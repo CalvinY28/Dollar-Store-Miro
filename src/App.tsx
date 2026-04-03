@@ -8,6 +8,7 @@ import {
     Transformer,
 } from "react-konva";
 import { jsPDF } from "jspdf";
+import localforage from "localforage";
 import type Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import "./App.css";
@@ -164,28 +165,8 @@ export default function App() {
     const clipboardRef = useRef<BoardItem[]>([]);
     const lastBoardPointerRef = useRef<{ x: number; y: number }>({ x: 300, y: 200 });
 
-    const [boards, setBoards] = useState<Board[]>(() => {
-        const saved = localStorage.getItem("board-app-boards");
-        if (!saved) return [createDefaultBoard("Board 1")];
-
-        try {
-            const parsed = JSON.parse(saved) as Partial<Board>[];
-            const normalized =
-                parsed.length > 0
-                    ? parsed.map((board, index) =>
-                        normalizeBoard(board, index, parsed.length)
-                    )
-                    : [createDefaultBoard("Board 1")];
-
-            if (normalized.length === 1) {
-                normalized[0] = { ...normalized[0], name: "Board 1" };
-            }
-
-            return normalized;
-        } catch {
-            return [createDefaultBoard("Board 1")];
-        }
-    });
+    const [boards, setBoards] = useState<Board[]>([createDefaultBoard("Board 1")]);
+    const [hasLoadedBoards, setHasLoadedBoards] = useState(false);
 
     const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -204,26 +185,63 @@ export default function App() {
     });
 
     useEffect(() => {
+        const loadBoards = async () => {
+            try {
+                const saved = await localforage.getItem<Partial<Board>[]>("board-app-boards");
+
+                if (!saved || saved.length === 0) {
+                    setBoards([createDefaultBoard("Board 1")]);
+                    setHasLoadedBoards(true);
+                    return;
+                }
+
+                const normalized = saved.map((board, index) =>
+                    normalizeBoard(board, index, saved.length)
+                );
+
+                if (normalized.length === 1) {
+                    normalized[0] = { ...normalized[0], name: "Board 1" };
+                }
+
+                setBoards(normalized);
+            } catch (error) {
+                console.error("Failed to load boards from IndexedDB:", error);
+                setBoards([createDefaultBoard("Board 1")]);
+            } finally {
+                setHasLoadedBoards(true);
+            }
+        };
+
+        loadBoards();
+    }, []);
+
+    useEffect(() => {
         if (!activeBoardId && boards.length > 0) {
             setActiveBoardId(boards[0].id);
         }
     }, [activeBoardId, boards]);
 
     useEffect(() => {
-        try {
-            const boardsToSave = boards.map((board) => ({
-                ...board,
-                history: {
-                    past: [],
-                    future: [],
-                },
-            }));
+        if (!hasLoadedBoards) return;
 
-            localStorage.setItem("board-app-boards", JSON.stringify(boardsToSave));
-        } catch (error) {
-            console.error("Failed to save boards to local storage:", error);
-        }
-    }, [boards]);
+        const saveBoards = async () => {
+            try {
+                const boardsToSave = boards.map((board) => ({
+                    ...board,
+                    history: {
+                        past: [],
+                        future: [],
+                    },
+                }));
+
+                await localforage.setItem("board-app-boards", boardsToSave);
+            } catch (error) {
+                console.error("Failed to save boards to IndexedDB:", error);
+            }
+        };
+
+        saveBoards();
+    }, [boards, hasLoadedBoards]);
 
     useEffect(() => {
         localStorage.setItem("board-app-dark-mode", String(darkMode));

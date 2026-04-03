@@ -216,7 +216,16 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        if (!activeBoardId && boards.length > 0) {
+        if (boards.length === 0) {
+            setActiveBoardId(null);
+            return;
+        }
+
+        const activeBoardStillExists = activeBoardId
+            ? boards.some((board) => board.id === activeBoardId)
+            : false;
+
+        if (!activeBoardStillExists) {
             setActiveBoardId(boards[0].id);
         }
     }, [activeBoardId, boards]);
@@ -248,7 +257,10 @@ export default function App() {
     }, [darkMode]);
 
     const activeBoard = boards.find((board) => board.id === activeBoardId) ?? null;
-    const activeBoardIndex = boards.findIndex((board) => board.id === activeBoardId);
+    const activeBoardIndex = Math.max(
+        0,
+        boards.findIndex((board) => board.id === activeBoardId)
+    );
     const scale = activeBoard?.scale ?? 0.25;
     const pos = activeBoard?.pos ?? { x: 100, y: 80 };
     const items = activeBoard?.items ?? [];
